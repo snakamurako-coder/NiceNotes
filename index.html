@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <style>
+    :root { --ui-height: 60px; }
+    body { margin: 0; background-color: #333; overflow: hidden; font-family: sans-serif; }
+    #toolbar { position: fixed; top: 0; left: 0; width: 100%; height: var(--ui-height); background: #ffffff; border-bottom: 1px solid #ddd; z-index: 100; display: flex; align-items: center; padding: 0 10px; gap: 10px; box-sizing: border-box; overflow-x: auto; white-space: nowrap; }
+    .tool-group { display: flex; align-items: center; gap: 8px; border-right: 1px solid #eee; padding-right: 10px; flex-shrink: 0; }
+    label { font-size: 11px; color: #666; display: block; margin-bottom: 2px;}
+    input[type="range"] { width: 90px; cursor: pointer; } 
+    input[type="number"] { width: 45px; padding: 2px 4px; border: 1px solid #ccc; border-radius: 3px; font-size: 12px; }
+    button, select { padding: 6px 10px; font-size: 14px; border-radius: 4px; border: 1px solid #ccc; cursor: pointer; background: #fff;}
+    #folder-select { background: #f8f9fa; font-weight: bold; border-color: #aaa; }
+    #file-select { max-width: 150px; }
+    .active-tool { background: #e8f0fe; border: 1px solid #1a73e8; font-weight: bold; }
+    #btn-laser { border-color: #d93025; color: #d93025; }
+    #btn-laser.active-tool { background: #fce8e6; color: #d93025; font-weight: bold; }
+    
+    .page-nav { display: flex; align-items: center; gap: 5px; font-weight: bold; font-size: 12px; color: #333; }
+    .page-nav button { padding: 4px 10px; background: #f1f3f4; border: none; font-size: 16px; border-radius: 4px; }
+    #page-indicator { min-width: 60px; text-align: center; }
+
+    #status { margin-left: auto; font-size: 12px; color: #888; text-align: right; flex-shrink: 0; padding-left: 10px; }
+    #viewer-container { margin-top: var(--ui-height); width: 100vw; height: calc(100vh - var(--ui-height)); overflow: auto; background: #555; overscroll-behavior: none; padding: 20px; box-sizing: border-box; }
+    #scroll-spacer { position: relative; }
+    #page-wrapper { position: absolute; top: 0; left: 0; background: #fff; box-shadow: 0 0 20px rgba(0,0,0,0.5); transform-origin: 0 0; }
+    canvas { position: absolute; top: 0; left: 0; }
+    #bg-canvas { z-index: 1; } 
+    #draw-canvas { z-index: 2; touch-action: none; cursor: crosshair; } 
+    .laser-dot { position: absolute; pointer-events: none; z-index: 9999; width: 16px; height: 16px; border-radius: 50%; background: radial-gradient(circle, #ff0000 20%, rgba(255,0,0,0.4) 60%, transparent 100%); box-shadow: 0 0 8px #ff0000; transform: translate(-50%, -50%); display: none; }
+    #loader { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); color: white; display: flex; align-items: center; justify-content: center; z-index: 9999; font-size: 20px; font-weight: bold; display: none; flex-direction: column; gap: 10px; }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+</head>
+<body>
+
+  <div id="loader"><span id="loader-text">読み込み中...</span></div>
+
+  <div id="toolbar">
+    <div class="tool-group">
+      <select id="folder-select" onchange="fetchFileList()">
+        <option value="seamless">シームレス管理</option>
+        <option value="single">個別ビューア</option>
+      </select>
+      <select id="file-select" onchange="onFileDropdownChanged()"></select>
+    </div>
+    
+    <div class="tool-group page-nav">
+      <button onclick="changePage(-1)">＜</button>
+      <span id="page-indicator">0/0</span>
+      <button onclick="changePage(1)">＞</button>
+    </div>
+
+    <div class="tool-group">
+      <div><label>色</label><input type="color" id="pen-color" value="#000000"></div>
+      <div>
+        <label>太さ</label>
+        <div style="display: flex; align-items: center; gap: 4px;">
+          <input type="range" id="pen-width-slider" min="0" max="100" value="38" oninput="updateWidthFromSlider()">
+          <input type="number" id="pen-width-input" min="0.5" max="30" step="0.1" value="5.0" oninput="updateWidthFromInput()">
+        </div>
+      </div>
+      <div><label>透明度</label><input type="range" id="pen-opacity" min="0.1" max="1.0" step="0.1" value="1.0"></div>
+    </div>
+
+    <div class="tool-group">
+      <button id="btn-pen" class="active-tool" onclick="setTool('pen')">ペン</button>
+      <button id="btn-eraser" onclick="setTool('eraser')">消しゴム</button>
+      <button id="btn-laser" onclick="setTool('laser')">レーザー</button>
+    </div>
+
+    <div class="tool-group">
+      <button style="background:#f4b400; color:white; border:none;" onclick="recognizeCurrentPageText()">文字起こし</button>
+      <button style="background:#1a73e8; color:white; border:none;" onclick="saveToServer()">手動保存</button>
+      <button style="background:#0f9d58; color:white; border:none;" onclick="exportFile()">出力</button>
+    </div>
+    
+    <div id="status">初期化中...</div>
+  </div>
+
+  <div id="viewer-container">
+    <div id="scroll-spacer">
+      <div id="page-wrapper">
+        <canvas id="bg-canvas"></canvas>
+        <canvas id="draw-canvas"></canvas>
+        <div id="my-laser" class="laser-dot"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+
+    const viewerContainer = document.getElementById('viewer-container');
+    const scrollSpacer = document.getElementById('scroll-spacer');
+    const pageWrapper = document.getElementById('page-wrapper');
+    const bgCanvas = document.getElementById('bg-canvas');
+    const drawCanvas = document.getElementById('draw-canvas');
+    const drawCtx = drawCanvas.getContext('2d');
+    const statusDiv = document.getElementById('status');
+    const pageIndicator = document.getElementById('page-indicator');
+    const myLaserDot = document.getElementById('my-laser');
+    
+    const folderSelect = document.getElementById('folder-select');
+    const fileSelect = document.getElementById('file-select');
+    const loader = document.getElementById('loader');
+    const loaderText = document.getElementById('loader-text');
+    
+    const widthSlider = document.getElementById('pen-width-slider');
+    const widthInput = document.getElementById('pen-width-input');
+    
+    const dpr = window.devicePixelRatio || 1;
+
+    let globalStrokes = {}; 
+    let currentFileId = null;
+    let fileName = "document.pdf";
+    let fileType = 'pdf'; 
+    let originalPdfBytes = null; 
+    let pdfDocJs = null;         
+    let currentImageObj = null; 
+    
+    let currentPageNum = 1;
+    let totalPages = 0;
+    let strokes = [];       
+    let strokesByPage = {}; 
+
+    let currentTool = 'pen';
+    let isDrawing = false;
+    let baseWidth = 0; let baseHeight = 0;
+    
+    const activePointers = new Map();
+    let isPanning = false; let lastPanX = 0; let lastPanY = 0;
+    let currentScale = 1.0; let initialPinchDist = 0; let initialScale = 1.0;
+    let pinchFocusX = 0; let pinchFocusY = 0;
+
+    const MIN_WIDTH = 0.5; const MAX_WIDTH = 30.0;
+    function updateWidthFromSlider() {
+      const t = parseFloat(widthSlider.value) / 100;
+      widthInput.value = (MIN_WIDTH + (MAX_WIDTH - MIN_WIDTH) * (t * t)).toFixed(1);
+    }
+    function updateWidthFromInput() {
+      let val = parseFloat(widthInput.value);
+      if (isNaN(val)) return;
+      if (val < MIN_WIDTH) val = MIN_WIDTH; if (val > MAX_WIDTH) val = MAX_WIDTH;
+      widthSlider.value = Math.round(Math.sqrt((val - MIN_WIDTH) / (MAX_WIDTH - MIN_WIDTH)) * 100);
+    }
+
+    window.onload = () => { fetchFileList(); };
+    function showLoader(text) { loaderText.textContent = text; loader.style.display = 'flex'; }
+    function hideLoader() { loader.style.display = 'none'; }
+
+    function fetchFileList() {
+      const mode = folderSelect.value;
+      showLoader("ファイル一覧を取得中...");
+      google.script.run.withSuccessHandler((list) => {
+          if (list.error) return alert("エラー: " + list.error), hideLoader();
+          if (list.length === 0) { fileSelect.innerHTML = "<option>ファイルなし</option>"; return hideLoader(); }
+          
+          fileSelect.innerHTML = "";
+          list.forEach(file => {
+            const option = document.createElement("option");
+            option.value = file.id; option.text = file.name; fileSelect.appendChild(option);
+          });
+          loadSelectedFile();
+        }).getFileList(mode);
+    }
+
+    function onFileDropdownChanged() {
+      autoSaveCurrent();
+      loadSelectedFile(false);
+    }
+
+    function autoSaveCurrent() {
+      if (!currentFileId || !fileName || Object.keys(strokesByPage).length === 0) return;
+      const json = JSON.stringify(strokesByPage);
+      const baseName = fileName.replace(/\.[^/.]+$/, "");
+      statusDiv.textContent = "自動保存中...";
+      google.script.run
+        .withSuccessHandler(() => { statusDiv.textContent = "自動保存完了"; })
+        .saveAnnotation(baseName, json);
+    }
+
+    function loadSelectedFile(goToLastPage = false) {
+      currentFileId = fileSelect.value;
+      if (!currentFileId) return;
+      
+      fileName = fileSelect.options[fileSelect.selectedIndex].text;
+      const baseName = fileName.replace(/\.[^/.]+$/, "");
+      const ext = fileName.split('.').pop().toLowerCase();
+      
+      fileType = (ext === 'jpg' || ext === 'jpeg' || ext === 'png') ? 'image' : 'pdf';
+
+      showLoader("ファイルをダウンロード中...");
+      
+      google.script.run.withSuccessHandler(async (base64Data) => {
+          if (base64Data.error) return alert("エラー: " + base64Data.error), hideLoader();
+          
+          if (fileType === 'pdf') {
+            const binaryString = window.atob(base64Data);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
+            originalPdfBytes = bytes.buffer;
+            pdfDocJs = await pdfjsLib.getDocument(bytes).promise;
+            totalPages = pdfDocJs.numPages;
+          } else {
+            const mimeType = ext === 'png' ? 'image/png' : 'image/jpeg';
+            currentImageObj = new Image();
+            await new Promise((resolve) => {
+              currentImageObj.onload = resolve;
+              currentImageObj.src = `data:${mimeType};base64,${base64Data}`;
+            });
+            totalPages = 1; 
+          }
+
+          currentPageNum = goToLastPage ? totalPages : 1;
+          showLoader("過去のデータを検索中...");
+          
+          google.script.run.withSuccessHandler((res) => {
+            if (res.success && res.data) globalStrokes[currentFileId] = JSON.parse(res.data);
+            else if(!globalStrokes[currentFileId]) globalStrokes[currentFileId] = {};
+            
+            strokesByPage = globalStrokes[currentFileId];
+            currentScale = 1.0; viewerContainer.scrollLeft = 0; viewerContainer.scrollTop = 0;
+            renderPage(currentPageNum);
+            hideLoader();
+          }).loadAnnotation(baseName);
+
+        }).getFileData(currentFileId);
+    }
+
+    async function renderPage(pageNum) {
+      statusDiv.textContent = "レンダリング中...";
+      if (!strokesByPage[pageNum]) strokesByPage[pageNum] = [];
+      strokes = strokesByPage[pageNum];
+
+      const bgCtx = bgCanvas.getContext('2d');
+
+      if (fileType === 'pdf') {
+        const page = await pdfDocJs.getPage(pageNum);
+        const viewport = page.getViewport({ scale: 1.5 });
+        baseWidth = viewport.width; baseHeight = viewport.height;
+        setSizeAndScale(bgCtx);
+        await page.render({ canvasContext: bgCtx, viewport: viewport }).promise;
+      } else {
+        baseWidth = currentImageObj.width; baseHeight = currentImageObj.height;
+        setSizeAndScale(bgCtx);
+        bgCtx.drawImage(currentImageObj, 0, 0, baseWidth, baseHeight);
+      }
+      
+      const fileIdx = fileSelect.selectedIndex + 1;
+      const fileTotal = fileSelect.options.length;
+      pageIndicator.innerHTML = `<span style="font-size:10px;">📄 ${fileIdx}/${fileTotal}</span><br>Pg ${pageNum}/${totalPages}`;
+      statusDiv.textContent = `書込み可 (x${currentScale.toFixed(1)})`;
+      redraw();
+    }
+
+    function setSizeAndScale(bgCtx) {
+      scrollSpacer.style.width = (baseWidth * currentScale) + "px"; 
+      scrollSpacer.style.height = (baseHeight * currentScale) + "px";
+      pageWrapper.style.width = baseWidth + "px"; pageWrapper.style.height = baseHeight + "px";
+
+      [bgCanvas, drawCanvas].forEach(canvas => {
+        canvas.width = baseWidth * dpr; canvas.height = baseHeight * dpr;
+        canvas.style.width = baseWidth + "px"; canvas.style.height = baseHeight + "px";
+      });
+      bgCtx.scale(dpr, dpr); drawCtx.scale(dpr, dpr);
+    }
+
+    async function changePage(delta) {
+      const newPage = currentPageNum + delta;
+      
+      if (newPage >= 1 && newPage <= totalPages) {
+        currentPageNum = newPage; 
+        await renderPage(currentPageNum);
+      } 
+      else if (newPage > totalPages) {
+        const nextIdx = fileSelect.selectedIndex + 1;
+        if (nextIdx < fileSelect.options.length) {
+          autoSaveCurrent();
+          fileSelect.selectedIndex = nextIdx;
+          loadSelectedFile(false);
+        } else {
+          statusDiv.textContent = "フォルダの最後です";
+        }
+      } 
+      else if (newPage < 1) {
+        const prevIdx = fileSelect.selectedIndex - 1;
+        if (prevIdx >= 0) {
+          autoSaveCurrent();
+          fileSelect.selectedIndex = prevIdx;
+          loadSelectedFile(true);
+        } else {
+          statusDiv.textContent = "フォルダの最初です";
+        }
+      }
+    }
+
+    function setTool(tool) {
+      currentTool = tool;
+      document.getElementById('btn-pen').classList.toggle('active-tool', tool === 'pen');
+      document.getElementById('btn-eraser').classList.toggle('active-tool', tool === 'eraser');
+      document.getElementById('btn-laser').classList.toggle('active-tool', tool === 'laser');
+      if(tool !== 'laser') myLaserDot.style.display = 'none';
+    }
+
+    function getScaledCoords(e) {
+      const rect = drawCanvas.getBoundingClientRect();
+      return { x: (e.clientX - rect.left) / currentScale, y: (e.clientY - rect.top) / currentScale, p: e.pressure };
+    }
+
+    drawCanvas.addEventListener('pointerdown', (e) => {
+      activePointers.set(e.pointerId, e);
+      if (e.pointerType === 'touch') {
+        if (activePointers.size === 1) { isPanning = true; lastPanX = e.clientX; lastPanY = e.clientY; } 
+        else if (activePointers.size === 2) {
+          isPanning = false; const pts = Array.from(activePointers.values());
+          initialPinchDist = Math.hypot(pts[0].clientX - pts[1].clientX, pts[0].clientY - pts[1].clientY);
+          initialScale = currentScale; const rect = viewerContainer.getBoundingClientRect();
+          const midX = (pts[0].clientX + pts[1].clientX) / 2; const midY = (pts[0].clientY + pts[1].clientY) / 2;
+          pinchFocusX = (viewerContainer.scrollLeft + midX - rect.left) / currentScale;
+          pinchFocusY = (viewerContainer.scrollTop + midY - rect.top) / currentScale;
+        }
+        return;
+      }
+      if (e.buttons === 0) return;
+      const isHardwareEraser = (e.buttons === 32 || e.button === 5);
+      const activeTool = isHardwareEraser ? 'eraser' : currentTool;
+      const pt = getScaledCoords(e);
+      if (activeTool === 'laser') { myLaserDot.style.display = 'block'; myLaserDot.style.left = pt.x + 'px'; myLaserDot.style.top = pt.y + 'px'; return; }
+      
+      isDrawing = true;
+      if (activeTool === 'pen') {
+        currentStroke = { color: document.getElementById('pen-color').value, opacity: parseFloat(document.getElementById('pen-opacity').value), width: parseFloat(widthInput.value), points: [pt] };
+        strokes.push(currentStroke);
+      } else eraseStroke(pt);
+    });
+
+    drawCanvas.addEventListener('pointermove', (e) => {
+      if (activePointers.has(e.pointerId)) activePointers.set(e.pointerId, e);
+      if (e.pointerType === 'touch') {
+        if (activePointers.size === 1 && isPanning) {
+          viewerContainer.scrollLeft -= (e.clientX - lastPanX); viewerContainer.scrollTop -= (e.clientY - lastPanY);
+          lastPanX = e.clientX; lastPanY = e.clientY;
+        } else if (activePointers.size === 2) {
+          const pts = Array.from(activePointers.values());
+          const currentDist = Math.hypot(pts[0].clientX - pts[1].clientX, pts[0].clientY - pts[1].clientY);
+          currentScale = Math.min(Math.max(0.5, initialScale * (currentDist / initialPinchDist)), 4.0);
+          scrollSpacer.style.width = (baseWidth * currentScale) + "px"; scrollSpacer.style.height = (baseHeight * currentScale) + "px";
+          pageWrapper.style.transform = `scale(${currentScale})`;
+          const rect = viewerContainer.getBoundingClientRect();
+          viewerContainer.scrollLeft = (pinchFocusX * currentScale) - ((pts[0].clientX + pts[1].clientX) / 2 - rect.left);
+          viewerContainer.scrollTop = (pinchFocusY * currentScale) - ((pts[0].clientY + pts[1].clientY) / 2 - rect.top);
+        }
+        return;
+      }
+      if (e.pointerType !== 'pen') return;
+      const pt = getScaledCoords(e);
+      const isHardwareEraser = (e.buttons === 32 || e.button === 5);
+      const activeTool = isHardwareEraser ? 'eraser' : currentTool;
+      if (activeTool === 'laser') { myLaserDot.style.display = 'block'; myLaserDot.style.left = pt.x + 'px'; myLaserDot.style.top = pt.y + 'px'; return; }
+      if (!isDrawing || e.buttons === 0) return;
+      if (activeTool === 'pen') { currentStroke.points.push(pt); redraw(); } else eraseStroke(pt);
+    });
+
+    function handlePointerEnd(e) {
+      activePointers.delete(e.pointerId);
+      if (currentTool === 'laser') myLaserDot.style.display = 'none';
+      if (activePointers.size === 0) { isPanning = false; isDrawing = false; } 
+      else if (activePointers.size === 1 && e.pointerType === 'touch') {
+        const remaining = Array.from(activePointers.values())[0];
+        lastPanX = remaining.clientX; lastPanY = remaining.clientY; isPanning = true;
+      }
+    }
+    ['pointerup', 'pointercancel', 'pointerleave', 'pointerout'].forEach(evt => drawCanvas.addEventListener(evt, handlePointerEnd));
+    window.addEventListener('pointerup', handlePointerEnd);
+
+    function eraseStroke(point) {
+      const threshold = 15;
+      strokes = strokes.filter(stroke => !stroke.points.some(p => Math.hypot(p.x - point.x, p.y - point.y) < threshold));
+      strokesByPage[currentPageNum] = strokes; redraw();
+    }
+
+    function drawStrokesToContext(ctx, strokesArray, clearRect) {
+      if (clearRect) ctx.clearRect(0, 0, baseWidth, baseHeight);
+      strokesArray.forEach(stroke => {
+        if (stroke.points.length < 2) return;
+        ctx.beginPath(); ctx.strokeStyle = stroke.color; ctx.globalAlpha = stroke.opacity; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+        for (let i = 1; i < stroke.points.length; i++) {
+          const p = stroke.points[i];
+          ctx.lineWidth = stroke.width * (0.5 + p.p * 0.5);
+          ctx.lineTo(p.x, p.y); ctx.stroke(); ctx.beginPath(); ctx.moveTo(p.x, p.y);
+        }
+      });
+      ctx.globalAlpha = 1.0;
+    }
+
+    function redraw() {
+      drawCtx.clearRect(0, 0, drawCanvas.width / dpr, drawCanvas.height / dpr);
+      drawStrokesToContext(drawCtx, strokes, false);
+    }
+
+    function saveToServer() {
+      if (!fileName) return alert("ファイルが開かれていません。");
+      statusDiv.textContent = "保存処理中...";
+      const json = JSON.stringify(strokesByPage); 
+      const baseName = fileName.replace(/\.[^/.]+$/, ""); 
+      google.script.run
+        .withSuccessHandler(res => {
+          if(res.success) statusDiv.textContent = "手動保存しました";
+          else { alert("エラー: " + res.error); statusDiv.textContent = "保存失敗"; }
+        })
+        .saveAnnotation(baseName, json);
+    }
+
+    // 【新規追加】現在のページのストロークを文字起こしする機能
+    function recognizeCurrentPageText() {
+      if (!strokes || strokes.length === 0) {
+        alert("このページに書き込みがありません。");
+        return;
+      }
+      
+      showLoader("文字起こしを実行中...");
+      
+      let apiInk = [];
+      strokes.forEach(stroke => {
+        if (!stroke.points || stroke.points.length === 0) return;
+        
+        let xArr = [], yArr = [], tArr = [];
+        stroke.points.forEach((p, index) => {
+          xArr.push(p.x);
+          yArr.push(p.y);
+          tArr.push(index * 50); 
+        });
+        apiInk.push([xArr, yArr, tArr]);
+      });
+
+      google.script.run
+        .withSuccessHandler(text => {
+          hideLoader();
+          if(text && text !== "認識エラー") {
+            // テキストをコピーしやすいようにプロンプトで表示
+            prompt("文字起こしの結果です。コピーしてご利用ください:", text);
+          } else {
+            alert("文字を認識できませんでした。");
+          }
+        })
+        .withFailureHandler(err => {
+          hideLoader();
+          alert("サーバーとの通信エラーが発生しました: " + err.message);
+        })
+        .recognizeSentence(apiInk);
+    }
+
+    async function exportFile() {
+      if (fileType === 'pdf') {
+        if (!originalPdfBytes) return alert("PDFがありません。");
+        showLoader("PDFを合成・生成中...");
+        try {
+          const { PDFDocument } = PDFLib;
+          const pdfDoc = await PDFDocument.load(originalPdfBytes);
+          const offCanvas = document.createElement('canvas'); const offCtx = offCanvas.getContext('2d');
+          offCanvas.width = baseWidth * dpr; offCanvas.height = baseHeight * dpr; offCtx.scale(dpr, dpr);
+
+          for (let i = 1; i <= totalPages; i++) {
+            const pageStrokes = strokesByPage[i];
+            if (!pageStrokes || pageStrokes.length === 0) continue;
+            drawStrokesToContext(offCtx, pageStrokes, true);
+            const pngImage = await pdfDoc.embedPng(offCanvas.toDataURL('image/png'));
+            const pdfPage = pdfDoc.getPage(i - 1);
+            pdfPage.drawImage(pngImage, { x: 0, y: 0, width: pdfPage.getWidth(), height: pdfPage.getHeight() });
+          }
+
+          const pdfBytes = await pdfDoc.save();
+          triggerDownload(new Blob([pdfBytes], { type: 'application/pdf' }), fileName.replace(/\.[^/.]+$/, "") + "_annotated.pdf");
+          hideLoader();
+        } catch (error) { console.error(error); alert("生成失敗: " + error.message); hideLoader(); }
+        
+      } else {
+        showLoader("画像を合成・生成中...");
+        try {
+          const offCanvas = document.createElement('canvas'); const offCtx = offCanvas.getContext('2d');
+          offCanvas.width = baseWidth * dpr; offCanvas.height = baseHeight * dpr; offCtx.scale(dpr, dpr);
+          offCtx.drawImage(currentImageObj, 0, 0, baseWidth, baseHeight);
+          
+          if (strokesByPage[1] && strokesByPage[1].length > 0) drawStrokesToContext(offCtx, strokesByPage[1], false);
+
+          const outMime = fileName.toLowerCase().endsWith('png') ? 'image/png' : 'image/jpeg';
+          offCanvas.toBlob((blob) => {
+            triggerDownload(blob, fileName.replace(/\.[^/.]+$/, "") + "_annotated." + outMime.split('/')[1]);
+            hideLoader();
+          }, outMime, 0.95);
+        } catch (error) { console.error(error); alert("生成失敗: " + error.message); hideLoader(); }
+      }
+    }
+
+    function triggerDownload(blob, downloadName) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url;
+      a.download = downloadName;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+    }
+  </script>
+</body>
+</html>
