@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NiceNotes Tasks（デモ・1ファイル）</title>
+  <style>
+    :root {
+      font-family: system-ui, sans-serif;
+      background: #121212;
+      color: #e8eaed;
+      line-height: 1.45;
+    }
+    body {
+      margin: 0;
+      padding: 16px;
+      max-width: 960px;
+      margin-inline: auto;
+    }
+    h1 { font-size: 1.2rem; margin: 0 0 12px; }
+    .panel {
+      background: #1e1e1e;
+      border: 1px solid #333;
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin-bottom: 12px;
+    }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    label { font-size: 12px; color: #9aa0a6; display: block; margin-bottom: 4px; }
+    input[type="text"], input[type="url"] {
+      flex: 1;
+      min-width: 200px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid #444;
+      background: #0d0d0d;
+      color: #e8eaed;
+    }
+    button {
+      padding: 8px 14px;
+      border-radius: 8px;
+      border: 1px solid #394867;
+      background: #8ab4f8;
+      color: #0b1426;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.secondary {
+      background: transparent;
+      color: #e8eaed;
+      border-color: #555;
+    }
+    .banner {
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: #1e2836;
+      border: 1px solid #394867;
+      margin-bottom: 12px;
+      display: none;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .banner.show { display: flex; }
+    .pill {
+      font-size: 11px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      border: 1px solid #444;
+    }
+    .pill.err { border-color: #c5221f; color: #f6aea9; }
+    .pill.ok { border-color: #137333; color: #a8dab5; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 12px;
+    }
+    .list { list-style: none; padding: 0; margin: 8px 0 0; }
+    .task {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: #141414;
+      border: 1px solid #2a2a2a;
+      margin-bottom: 6px;
+    }
+    .task .title { font-weight: 600; }
+    .task .sub { font-size: 12px; color: #9aa0a6; }
+    .muted { color: #9aa0a6; font-size: 13px; }
+    .error { color: #f6aea9; font-size: 13px; margin-top: 8px; }
+    small.h { color: #9aa0a6; font-weight: normal; }
+  </style>
+</head>
+<body>
+  <h1>NiceNotes Tasks <small class="h">（B: 単一 HTML デモ）</small></h1>
+
+  <p class="muted" style="margin-top:0;font-size:13px;">
+    GAS の Web アプリ URL（<code>…/exec</code>）を下に貼り、「保存」後に同期できます。
+    <code>file://</code> で開くとクロスオリジンの <code>fetch</code> がブロックされることがあるため、ローカルなら <code>npx serve .</code> などで http で開いてください。
+  </p>
+
+  <div class="panel">
+    <label for="gasUrl">GAS Web アプリ URL（/exec で終わる）</label>
+    <div class="row">
+      <input type="url" id="gasUrl" placeholder="https://script.google.com/.../exec" autocomplete="off" />
+      <button type="button" id="btnSaveUrl">保存（このブラウザのみ）</button>
+      <button type="button" id="btnFetch">今すぐ取得</button>
+    </div>
+    <div id="connStatus" class="row" style="margin-top:8px;"></div>
+    <div id="fetchError" class="error"></div>
+  </div>
+
+  <div id="remoteBanner" class="banner">
+    <span>サーバー側に新しい変更がある可能性があります</span>
+    <div class="row">
+      <button type="button" id="btnApplyRemote">最新を取り込む</button>
+      <button type="button" class="secondary" id="btnDismissBanner">閉じる</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <strong>今すぐメモ</strong>
+    <div class="row" style="margin-top:8px;">
+      <input type="text" id="quickTitle" placeholder="タイトル" />
+      <button type="button" id="btnQuick">追加</button>
+    </div>
+    <div id="quickErr" class="error"></div>
+  </div>
+
+  <div class="grid" id="buckets"></div>
+
+  <script type="module">
+    import Dexie from 'https://cdn.jsdelivr.net/npm/dexie@4.4.2/+esm';
+
+    const LS_KEY = 'niceNotes_gas_base_url';
+    const META_PENDING = 'pendingRemoteRefresh';
+
+    function trimSlash(u) {
+      return u.replace(/\/+$/, '');
+    }
+
+    function todayYmd() {
+      return new Date().toLocaleDateString('en-CA');
+    }
+
+    function bucketForTask(t) {
+      if (t.status !== 'active') return 'anytime';
+      const today = todayYmd();
+      if (t.dueDate && t.dueDate < today) return 'today';
+      if (t.dueDate === today || t.startDate === today) return 'today';
+      if (t.dueDate) return t.dueDate > today ? 'scheduled' : 'anytime';
+      return 'anytime';
+    }
+
+    function groupByBucket(tasks) {
+      const out = { today: [], scheduled: [], anytime: [] };
+      for (const t of tasks) out[bucketForTask(t)].push(t);
+      return out;
+    }
+
+    const BUCKET_LABEL = { today: '今日', scheduled: '予定', anytime: 'いつでも' };
+
+    class TaskDB extends Dexie {
+      constructor() {
+        super('nice-notes-task-app');
+        this.version(1).stores({
+          tasks: 'id, status, dueDate, updatedAt',
+          meta: 'key',
+        });
+      }
+    }
+    const db = new TaskDB();
+
+    const el = {
+      gasUrl: document.getElementById('gasUrl'),
+      btnSaveUrl: document.getElementById('btnSaveUrl'),
+      btnFetch: document.getElementById('btnFetch'),
+      connStatus: document.getElementById('connStatus'),
+      fetchError: document.getElementById('fetchError'),
+      remoteBanner: document.getElementById('remoteBanner'),
+      btnApplyRemote: document.getElementById('btnApplyRemote'),
+      btnDismissBanner: document.getElementById('btnDismissBanner'),
+      quickTitle: document.getElementById('quickTitle'),
+      btnQuick: document.getElementById('btnQuick'),
+      quickErr: document.getElementById('quickErr'),
+      buckets: document.getElementById('buckets'),
+    };
+
+    function getBaseUrl() {
+      const v = el.gasUrl.value.trim() || localStorage.getItem(LS_KEY) || '';
+      return v ? trimSlash(v) : '';
+    }
+
+    async function fetchTasksFromGas(baseUrl) {
+      const res = await fetch(`${baseUrl}?mode=tasks`, {
+        method: 'GET',
+        credentials: 'include',
+      });
+      if (!res.ok) throw new Error('GET ' + res.status);
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.message || data.error || 'GET error');
+      return data.tasks;
+    }
+
+    async function upsertOnGas(baseUrl, body) {
+      const res = await fetch(baseUrl, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error('POST ' + res.status);
+      const data = await res.json();
+      if (!data.ok || !data.task) throw new Error(data.message || data.error || 'POST error');
+      return data.task;
+    }
+
+    async function checkRemoteDiff(remote) {
+      const local = await db.tasks.toArray();
+      if (local.length === 0 && remote.length > 0) {
+        await db.tasks.bulkPut(remote);
+        await db.meta.delete(META_PENDING);
+        el.remoteBanner.classList.remove('show');
+        return;
+      }
+      const map = new Map(local.map((t) => [t.id, t]));
+      let need = local.length !== remote.length;
+      for (const r of remote) {
+        const l = map.get(r.id);
+        if (!l || l.updatedAt !== r.updatedAt) {
+          need = true;
+          break;
+        }
+      }
+      if (need) {
+        await db.meta.put({ key: META_PENDING, value: '1' });
+        el.remoteBanner.classList.add('show');
+      }
+    }
+
+    function renderConn(baseUrl, fetching, err) {
+      el.fetchError.textContent = err || '';
+      el.connStatus.innerHTML = '';
+      if (!baseUrl) {
+        el.connStatus.innerHTML = '<span class="pill">GAS URL 未設定 → IndexedDB のみ</span>';
+        return;
+      }
+      el.connStatus.innerHTML =
+        '<span class="pill ok">URL あり</span>' +
+        (fetching ? '<span class="pill">取得中…</span>' : '');
+    }
+
+    function renderBuckets() {
+      db.tasks
+        .orderBy('updatedAt')
+        .reverse()
+        .toArray()
+        .then((tasks) => {
+          const g = groupByBucket(tasks);
+          el.buckets.innerHTML = ['today', 'scheduled', 'anytime']
+            .map((key) => {
+              const items = g[key];
+              const lis = items
+                .map((t) => {
+                  const sub = [t.area, t.dueDate ? '期限 ' + t.dueDate : ''].filter(Boolean).join(' · ');
+                  const doneBtn =
+                    t.status === 'active'
+                      ? `<button type="button" data-complete="${t.id}" class="secondary" style="padding:4px 8px;font-size:12px;">完了</button>`
+                      : '';
+                  return `<li class="task"><div><div class="title">${escapeHtml(t.title)}</div><div class="sub">${escapeHtml(sub)}</div></div>${doneBtn}</li>`;
+                })
+                .join('');
+              const empty = items.length === 0 ? '<li class="muted">（なし）</li>' : '';
+              return `<section class="panel"><h3 style="margin:0 0 8px;font-size:1rem;">${BUCKET_LABEL[key]} <small class="h">(${items.length})</small></h3><ul class="list">${lis || empty}</ul></section>`;
+            })
+            .join('');
+
+          el.buckets.querySelectorAll('[data-complete]').forEach((btn) => {
+            btn.addEventListener('click', () => completeTask(btn.getAttribute('data-complete')));
+          });
+        });
+    }
+
+    function escapeHtml(s) {
+      const d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    async function completeTask(id) {
+      const t = await db.tasks.get(id);
+      if (!t) return;
+      const base = getBaseUrl();
+      el.quickErr.textContent = '';
+      try {
+        if (base) {
+          const saved = await upsertOnGas(base, {
+            action: 'upsert',
+            task: { ...t, status: 'completed' },
+            expectedUpdatedAt: t.updatedAt,
+          });
+          await db.tasks.put(saved);
+        } else {
+          await db.tasks.put({
+            ...t,
+            status: 'completed',
+            updatedAt: new Date().toISOString(),
+          });
+        }
+        renderBuckets();
+      } catch (e) {
+        el.quickErr.textContent = e.message || String(e);
+      }
+    }
+
+    async function doQuickAdd() {
+      const title = el.quickTitle.value.trim();
+      if (!title) return;
+      el.quickErr.textContent = '';
+      const base = getBaseUrl();
+      const payload = {
+        area: 'Inbox',
+        project: '',
+        heading: 'いつでも',
+        title,
+        notes: '',
+        status: 'active',
+        startDate: '',
+        dueDate: '',
+        checkItems: [],
+      };
+      try {
+        if (base) {
+          const saved = await upsertOnGas(base, { action: 'upsert', task: payload });
+          await db.tasks.put(saved);
+        } else {
+          const id = crypto.randomUUID();
+          await db.tasks.put({
+            ...payload,
+            id,
+            updatedAt: new Date().toISOString(),
+          });
+        }
+        el.quickTitle.value = '';
+        renderBuckets();
+      } catch (e) {
+        el.quickErr.textContent = e.message || String(e);
+      }
+    }
+
+    async function pullRemote() {
+      const base = getBaseUrl();
+      el.fetchError.textContent = '';
+      if (!base) {
+        renderConn('', false, '');
+        return;
+      }
+      renderConn(base, true, '');
+      try {
+        const remote = await fetchTasksFromGas(base);
+        await checkRemoteDiff(remote);
+        renderBuckets();
+        renderConn(base, false, '');
+      } catch (e) {
+        renderConn(base, false, e.message || String(e));
+      }
+    }
+
+    el.btnSaveUrl.addEventListener('click', () => {
+      const u = el.gasUrl.value.trim();
+      if (u) localStorage.setItem(LS_KEY, trimSlash(u));
+      else localStorage.removeItem(LS_KEY);
+      pullRemote();
+    });
+
+    el.btnFetch.addEventListener('click', () => pullRemote());
+    el.btnQuick.addEventListener('click', () => doQuickAdd());
+    el.quickTitle.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') doQuickAdd();
+    });
+
+    el.btnApplyRemote.addEventListener('click', async () => {
+      const base = getBaseUrl();
+      if (!base) return;
+      el.fetchError.textContent = '';
+      try {
+        const remote = await fetchTasksFromGas(base);
+        await db.tasks.clear();
+        await db.tasks.bulkPut(remote);
+        await db.meta.delete(META_PENDING);
+        el.remoteBanner.classList.remove('show');
+        renderBuckets();
+      } catch (e) {
+        el.fetchError.textContent = e.message || String(e);
+      }
+    });
+
+    el.btnDismissBanner.addEventListener('click', async () => {
+      await db.meta.delete(META_PENDING);
+      el.remoteBanner.classList.remove('show');
+    });
+
+    (async function init() {
+      const saved = localStorage.getItem(LS_KEY);
+      if (saved) el.gasUrl.value = saved;
+
+      const pending = await db.meta.get(META_PENDING);
+      if (pending) el.remoteBanner.classList.add('show');
+
+      renderBuckets();
+      await pullRemote();
+    })();
+  </script>
+</body>
+</html>
