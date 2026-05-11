@@ -12,7 +12,7 @@
 3. **Google Identity Services（GIS）でアクセストークンを取得**し、**Apps Script Execution API** で `script.run` する（Web アプリ URL ではなく API 側を呼び出す）。
 4. 組織ポリシーがある場合は **Workspace 管理者** に OAuth クライアント／承認済みドメインを確認する。
 
-このリポジトリの GAS 側は **メール別 AllowList**（[`AllowList.js`](AllowList.js)）と **ユーザー権限実行**（[`appsscript.json`](appsscript.json)）を前提にしています。Execution API に切り替える場合も、スクリプト内の `Session.getActiveUser().getEmail()` と同じユーザーでトークンを取得する必要があります。
+このリポジトリの GAS 側は **メール別 AllowList**（[`code.js`](code.js) 内）と **ユーザー権限実行**（[`appsscript.json`](../appsscript.json)）を前提にしています。Execution API に切り替える場合も、スクリプト内の `Session.getActiveUser().getEmail()` と同じユーザーでトークンを取得する必要があります。
 
 ## フロントの環境変数
 

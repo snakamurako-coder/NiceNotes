@@ -2,7 +2,7 @@
 
 ## 構成
 
-- **GAS**: [`コード.js`](コード.js) がエントリ（`doGet` / `doPost`）。タスクAPI・レガシーPDF UI を同居。
+- **GAS（デプロイ単位）**: [`code.js`](code.js) と [`index.html`](index.html)（[`appsscript.json`](appsscript.json) はマニフェスト）。分割なしで `clasp push` しやすい構成。
 - **マスターデータ**: Google スプレッドシート1冊（フラット [`docs/TASK_SCHEMA.md`](docs/TASK_SCHEMA.md)）。
 - **フロント**: [`frontend/`](frontend/)（Vite + React + Dexie + TanStack Query）。
 
@@ -42,4 +42,4 @@ npm run build
 ## テスト
 
 - フロント: `cd frontend && npm test`
-- GAS: エディタで `runTaskAppUnitTests` を実行（`Tests.js`）
+- GAS: エディタで `runTaskAppUnitTests` を実行（[`code.js`](code.js) 末尾）
