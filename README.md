@@ -4,7 +4,23 @@
 
 - **GAS（デプロイ単位）**: [`code.js`](code.js) と [`index.html`](index.html)（[`appsscript.json`](appsscript.json) はマニフェスト）。分割なしで `clasp push` しやすい構成。
 - **マスターデータ**: Google スプレッドシート1冊（フラット [`docs/TASK_SCHEMA.md`](docs/TASK_SCHEMA.md)）。
-- **フロント**: [`frontend/`](frontend/)（Vite + React + Dexie + TanStack Query）。
+- **フル UI**: [`frontend/`](frontend/)（Vite + React + Dexie + TanStack Query）。
+- **デモ（ファイル数を最小にしたいとき）**: ルートの [**`task-demo.html`**](task-demo.html) のみで試せます（ビルド不要・1 ファイル）。
+
+## デモ（単一 HTML・B パターン）
+
+[`task-demo.html`](task-demo.html) は CSS / JS を同居させた静的ファイルです。Dexie は CDN から読みます。IndexedDB 名は `frontend` 版と同じ `nice-notes-task-app` のため、同じブラウザではデータを共有します。
+
+1. リポジトリのルートで HTTP サーバーを立てる（**`file://` だと GAS へ `fetch` が失敗しやすい**です）:
+
+```bash
+npx serve .
+```
+
+2. ブラウザで `http://localhost:3000/task-demo.html`（ポートは `serve` の表示に合わせる）を開く。
+3. GAS の Web アプリ URL（`…/exec`）を入力して **保存** → **今すぐ取得** で一覧同期、**今すぐメモ**で追加。
+
+本格運用・分割は [`frontend/`](frontend/) を利用してください。
 
 ## GAS セットアップ
 
@@ -22,7 +38,7 @@
 GitHub Pages など別ドメインから `fetch` する場合、ログインリダイレクトや CORS で失敗することがあります。  
 対策の候補は [`docs/CORS_AND_AUTH.md`](docs/CORS_AND_AUTH.md) を参照してください。
 
-## フロント
+## フロント（Vite）
 
 ```bash
 cd frontend
