@@ -1,87 +1,137 @@
-function doGet() {
+/**
+ * Entry: legacy PDF/HTML UI + Tasks JSON API (GitHub Pages / fetch).
+ */
+
+/**
+ * @param {Object} [e]
+ * @returns {GoogleAppsScript.HTML.HtmlOutput|GoogleAppsScript.Content.TextOutput}
+ */
+function doGet(e) {
+  var mode = e && e.parameter && e.parameter.mode;
+  if (mode === 'tasks') {
+    return handleTasksGet_();
+  }
   return HtmlService.createHtmlOutputFromFile('index')
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no')
+    .addMetaTag(
+      'viewport',
+      'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no'
+    )
     .setTitle('Universal Document Workspace');
+}
+
+/**
+ * @param {Object} e
+ * @returns {GoogleAppsScript.Content.TextOutput}
+ */
+function doPost(e) {
+  var body = {};
+  try {
+    body = JSON.parse((e.postData && e.postData.contents) || '{}');
+  } catch (err) {
+    return jsonOutput_({
+      ok: false,
+      error: 'VALIDATION',
+      message: 'Invalid JSON body',
+    });
+  }
+  return handleTasksPost_(body);
 }
 
 function getFileList(mode) {
   try {
-    const props = PropertiesService.getScriptProperties();
-    let folderId = mode === 'single' ? props.getProperty('SINGLE_FOLDER_ID') : props.getProperty('SEAMLESS_FOLDER_ID');
-    
-    if (!folderId) return { error: `プロパティに ${mode} フォルダのIDがありません。` };
+    var props = PropertiesService.getScriptProperties();
+    var folderId =
+      mode === 'single'
+        ? props.getProperty('SINGLE_FOLDER_ID')
+        : props.getProperty('SEAMLESS_FOLDER_ID');
 
-    const folder = DriveApp.getFolderById(folderId);
-    const files = folder.getFiles();
-    const list = [];
-    
+    if (!folderId)
+      return {
+        error: 'プロパティに ' + mode + ' フォルダのIDがありません。',
+      };
+
+    var folder = DriveApp.getFolderById(folderId);
+    var files = folder.getFiles();
+    var list = [];
+
     while (files.hasNext()) {
-      const file = files.next();
-      const mime = file.getMimeType();
-      if (mime === MimeType.PDF || mime === MimeType.JPEG || mime === MimeType.PNG) {
+      var file = files.next();
+      var mime = file.getMimeType();
+      if (
+        mime === MimeType.PDF ||
+        mime === MimeType.JPEG ||
+        mime === MimeType.PNG
+      ) {
         list.push({ id: file.getId(), name: file.getName() });
       }
     }
     return list;
-  } catch (e) {
-    return { error: e.toString() };
+  } catch (err) {
+    return { error: err.toString() };
   }
 }
 
 function getFileData(fileId) {
   try {
-    const file = DriveApp.getFileById(fileId);
+    var file = DriveApp.getFileById(fileId);
     return Utilities.base64Encode(file.getBlob().getBytes());
-  } catch (e) {
-    return { error: e.toString() };
+  } catch (err) {
+    return { error: err.toString() };
   }
 }
 
 function saveAnnotation(fileName, jsonData) {
   try {
-    const folder = DriveApp.getRootFolder();
-    const targetName = fileName + '_rev.json';
-    const files = folder.getFilesByName(targetName);
+    var folder = DriveApp.getRootFolder();
+    var targetName = fileName + '_rev.json';
+    var files = folder.getFilesByName(targetName);
     if (files.hasNext()) {
-      files.next().setContent(jsonData); 
+      files.next().setContent(jsonData);
     } else {
-      folder.createFile(targetName, jsonData, MimeType.PLAIN_TEXT); 
+      folder.createFile(targetName, jsonData, MimeType.PLAIN_TEXT);
     }
     return { success: true };
-  } catch (e) { return { success: false, error: e.toString() }; }
+  } catch (err) {
+    return { success: false, error: err.toString() };
+  }
 }
 
 function loadAnnotation(fileName) {
   try {
-    const files = DriveApp.getRootFolder().getFilesByName(fileName + '_rev.json');
-    if (files.hasNext()) return { success: true, data: files.next().getBlob().getDataAsString() };
+    var files = DriveApp.getRootFolder().getFilesByName(fileName + '_rev.json');
+    if (files.hasNext())
+      return { success: true, data: files.next().getBlob().getDataAsString() };
     return { success: true, data: null };
-  } catch (e) { return { success: false, error: e.toString() }; }
+  } catch (err) {
+    return { success: false, error: err.toString() };
+  }
 }
 
-// 【新規追加】ストローク配列を受け取りGoogle APIへ送る関数
 function recognizeSentence(allStrokes) {
-  const url = "https://www.google.com.hk/inputtools/request?ime=handwriting&app=mobilesearch&cs=1&oe=UTF-8";
-  const payload = {
-    "options": "enable_pre_space",
-    "requests": [{
-      "writing_guide": { "writing_area_width": 1000, "writing_area_height": 1000 },
-      "ink": allStrokes,
-      "language": "ja"
-    }]
+  var url =
+    'https://www.google.com.hk/inputtools/request?ime=handwriting&app=mobilesearch&cs=1&oe=UTF-8';
+  var payload = {
+    options: 'enable_pre_space',
+    requests: [
+      {
+        writing_guide: { writing_area_width: 1000, writing_area_height: 1000 },
+        ink: allStrokes,
+        language: 'ja',
+      },
+    ],
   };
 
   try {
-    const response = UrlFetchApp.fetch(url, {
-      method: "post",
-      contentType: "application/json",
-      payload: JSON.stringify(payload)
+    var response = UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
     });
-    const result = JSON.parse(response.getContentText());
-    if (result[0] === "SUCCESS") {
+    var result = JSON.parse(response.getContentText());
+    if (result[0] === 'SUCCESS') {
       return result[1][0][1][0];
     }
-  } catch (e) {
-    return "認識エラー";
+  } catch (err) {
+    return '認識エラー';
   }
 }
